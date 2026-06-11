@@ -71,6 +71,45 @@
   .btn { width:44px; height:44px; flex:0 0 auto; border-radius:50%; border:1px solid rgba(39,211,230,.45); background:rgba(39,211,230,.1); color:var(--teal); font-size:17px; cursor:pointer; transition:all .2s; }
   .btn.active { background:var(--orange); border-color:var(--orange); color:#fff; box-shadow:0 0 18px rgba(242,99,52,.8); animation:pulse 1.2s infinite; }
   @keyframes pulse { 50% { box-shadow:0 0 30px rgba(242,99,52,1); } }
+
+  /* ── Signals board ── */
+  #board {
+    position:fixed; top:0; right:0; bottom:0; width:300px; z-index:30;
+    background:rgba(2,12,17,.97); border-left:1px solid rgba(39,211,230,.18);
+    transform:translateX(100%); transition:transform .25s ease;
+    display:flex; flex-direction:column; padding-bottom:env(safe-area-inset-bottom);
+  }
+  #board.open { transform:none; box-shadow:-12px 0 40px rgba(0,0,0,.6); }
+  #boardHead {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 14px 10px; font-size:11px; letter-spacing:.25em; color:var(--teal);
+  }
+  #boardHead .meta { font-size:9px; letter-spacing:.12em; color:var(--dim); }
+  #boardClose { background:none; border:none; color:var(--dim); font-size:16px; cursor:pointer; }
+  #netRow { padding:0 14px 10px; font-size:10px; letter-spacing:.15em; color:var(--dim); }
+  #netRow b { font-family:ui-monospace,Menlo,monospace; font-size:13px; }
+  #tiles { flex:1; overflow-y:auto; padding:0 10px 14px; display:flex; flex-direction:column; gap:7px; }
+  .tile {
+    border:1px solid rgba(39,211,230,.15); border-left:3px solid var(--dim);
+    border-radius:9px; padding:9px 11px; background:rgba(4,20,27,.8); cursor:pointer;
+  }
+  .tile:active { background:rgba(39,211,230,.08); }
+  .tile .row1 { display:flex; justify-content:space-between; align-items:baseline; }
+  .tile .sid { font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--dim); letter-spacing:.08em; }
+  .tile .score { font-family:ui-monospace,Menlo,monospace; font-size:14px; font-weight:700; }
+  .tile .nm { font-size:12px; line-height:1.35; color:#d8f1f6; margin-top:2px; }
+  .tile .st { font-size:9.5px; color:var(--dim); margin-top:3px; letter-spacing:.04em; }
+  .tile.pos { border-left-color:#3ddc97; } .tile.pos .score { color:#3ddc97; }
+  .tile.neg { border-left-color:var(--orange); } .tile.neg .score { color:var(--orange); }
+  .tile.zero { border-left-color:var(--teal); } .tile.zero .score { color:var(--teal); }
+  .tile.off { opacity:.42; border-left-style:dashed; }
+  .tile.hot { box-shadow:inset 0 0 18px rgba(242,99,52,.12); }
+  /* Desktop: board becomes a permanent right rail */
+  @media (min-width: 900px) {
+    body { padding-right:300px; }
+    #board { transform:none; box-shadow:none; }
+    #boardClose, #sigTog { display:none; }
+  }
 </style>
 </head>
 <body>
@@ -90,9 +129,20 @@
   <canvas id="bars"></canvas>
   <div class="corner c1"></div><div class="corner c2"></div><div class="corner c3"></div><div class="corner c4"></div>
   <div id="toggles">
+    <div class="tog" id="sigTog">SIGNALS</div>
     <div class="tog" id="liveTog">LIVE</div>
     <div class="tog on" id="voiceTog">VOICE</div>
   </div>
+</div>
+
+<div id="board">
+  <div id="boardHead">
+    <span>SIGNAL BOARD</span>
+    <span class="meta" id="boardMeta"></span>
+    <button id="boardClose">✕</button>
+  </div>
+  <div id="netRow"></div>
+  <div id="tiles"></div>
 </div>
 
 <div id="chat"></div>
@@ -121,13 +171,13 @@ var convo = [], busy = false, live = false, voiceOn = true, speaking = false, mi
 var token = localStorage.getItem('digit_token') || '';
 var chat = document.getElementById('chat'), q = document.getElementById('q');
 var ticker = document.getElementById('ticker');
-var TICKS = ['GS1 SIGNALS ONLINE','19 SIGNALS TRACKED','CHECK DIGIT VALID','MONITORING DEMAND VECTORS','SUNRISE 2027 T-MINUS','ODP LINK STABLE'];
+var TICKS = ['GS1 SIGNALS ONLINE','CHECK DIGIT VALID','MONITORING DEMAND VECTORS','SUNRISE 2027 T-MINUS','ODP LINK STABLE'];
 var tickIdx = 0;
 setInterval(function(){ if(!busy && !speaking){ ticker.textContent = TICKS[tickIdx++ % TICKS.length]; } }, 5000);
 function setTicker(t, alert){ ticker.textContent = t; ticker.classList.toggle('alert', !!alert); }
 
 // ── BOOT GATE ────────────────────────────────────────────────────────────────
-var bootLines = ['> DIGIT v2.0','> Demand & Industry GS1 Intelligence Tracker','> calibrating check digits ........ <span class="ok">MOD-10 OK</span>','> linking signals tracker ......... <span class="ok">19 SIGNALS</span>','> voice synthesis ................. <span class="ok">READY</span>','> awaiting authorization'];
+var bootLines = ['> DIGIT v2.0','> Demand & Industry GS1 Intelligence Tracker','> calibrating check digits ........ <span class="ok">MOD-10 OK</span>','> linking signals tracker ......... <span class="ok">LINKED</span>','> voice synthesis ................. <span class="ok">READY</span>','> awaiting authorization'];
 var bl = document.getElementById('bootlog'), li = 0;
 (function bootStep(){
   if (li < bootLines.length) { bl.innerHTML += bootLines[li++] + '<br>'; setTimeout(bootStep, 260); }
@@ -139,8 +189,11 @@ function tryAuth(t) {
     if (r && r.ok) {
       token = t; localStorage.setItem('digit_token', t);
       document.getElementById('gate').style.display = 'none';
+      renderBoard(r);
       setTicker('GS1 SIGNALS ONLINE');
-      var greet = "Good day, sir. DIGIT online — nineteen signals verified, check digits valid. Ask away, or enable LIVE and I'll sweep for intraday developments.";
+      var greet = "Good day, sir. DIGIT online — " + r.active + " active signals of " + r.total +
+        " tracked, net composite " + (r.net > 0 ? "+" : "") + r.net +
+        ". Ask away, or enable LIVE and I'll sweep for intraday developments.";
       bubble('digit', greet, true); convo.push({ role: 'model', text: greet });
     } else {
       localStorage.removeItem('digit_token');
@@ -152,6 +205,41 @@ function tryAuth(t) {
     document.getElementById('gateErr').textContent = 'API UNREACHABLE — CHECK API_URL';
   });
 }
+
+// ── SIGNALS BOARD ────────────────────────────────────────────────────────────
+function renderBoard(d) {
+  if (!d.signals) return;
+  TICKS = ['GS1 SIGNALS ONLINE', d.active + ' ACTIVE / ' + d.total + ' TRACKED',
+           'NET COMPOSITE ' + (d.net > 0 ? '+' : '') + d.net, 'CHECK DIGIT VALID',
+           'MONITORING DEMAND VECTORS', 'REFRESHED ' + (d.refreshed || '').toUpperCase()];
+  document.getElementById('boardMeta').textContent = d.active + ' ACTIVE / ' + d.total;
+  document.getElementById('netRow').innerHTML = 'NET COMPOSITE (ACTIVE): <b style="color:' +
+    (d.net > 0 ? '#3ddc97' : d.net < 0 ? 'var(--orange)' : 'var(--teal)') + '">' +
+    (d.net > 0 ? '+' : '') + d.net + '</b> &nbsp;·&nbsp; ' + (d.refreshed || '');
+  var tiles = document.getElementById('tiles'); tiles.innerHTML = '';
+  d.signals.slice().sort(function (a, b) { return (b.active - a.active) || (Math.abs(b.score) - Math.abs(a.score)); })
+    .forEach(function (s) {
+      var div = document.createElement('div');
+      var cls = s.score > 0 ? 'pos' : s.score < 0 ? 'neg' : 'zero';
+      var hot = /escalating|imminent/i.test(s.status);
+      div.className = 'tile ' + cls + (s.active ? '' : ' off') + (hot && s.active ? ' hot' : '');
+      div.innerHTML = '<div class="row1"><span class="sid">' + s.id + ' · ' + s.cat + '</span>' +
+        '<span class="score">' + (s.score > 0 ? '+' : '') + s.score + '</span></div>' +
+        '<div class="nm">' + s.name + '</div>' +
+        '<div class="st">' + s.status + (s.updated ? ' · upd ' + s.updated : '') + '</div>';
+      div.onclick = function () {
+        document.getElementById('board').classList.remove('open');
+        q.value = 'Give me the full picture on ' + s.id + ' (' + s.name + ') — current state, why the score is ' +
+          (s.score > 0 ? '+' : '') + s.score + ', and our next best action.';
+        ask();
+      };
+      tiles.appendChild(div);
+    });
+}
+function refreshBoard() { api({ token: token, action: 'signals' }, function (r) { if (r.ok) renderBoard(r); }); }
+setInterval(function () { if (token && !busy) refreshBoard(); }, 5 * 60 * 1000); // re-sync every 5 min
+document.getElementById('sigTog').onclick = function () { refreshBoard(); document.getElementById('board').classList.add('open'); };
+document.getElementById('boardClose').onclick = function () { document.getElementById('board').classList.remove('open'); };
 document.getElementById('pinGo').onclick = function(){ var v = document.getElementById('pin').value.trim(); if (v) tryAuth(v); };
 document.getElementById('pin').addEventListener('keydown', function(e){ if (e.key==='Enter') document.getElementById('pinGo').click(); });
 
